@@ -1,9 +1,11 @@
-﻿venv/
+venv/
 node_modules/
 __pycache__/
 .env
 backend/.env
 backend/venv/
 backend/__pycache__/
+backend/blooms.db
 frontend/node_modules/
+frontend/dist/
 .DS_Store

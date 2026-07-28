@@ -2,13 +2,18 @@ import sqlite3
 import json
 import os
 
-DB_FILE = "blooms.db"
-SEED_FILE = "blooms_verbs.json"
+# Use __file__-relative paths so files are always found regardless of CWD.
+# On Vercel, the filesystem is read-only except for /tmp, so DB_PATH
+# can be overridden via the DB_PATH env var (e.g. /tmp/blooms.db).
+_HERE = os.path.dirname(os.path.abspath(__file__))
+DB_FILE = os.environ.get("DB_PATH", os.path.join(_HERE, "blooms.db"))
+SEED_FILE = os.path.join(_HERE, "blooms_verbs.json")
+
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    
+
     # Create table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS blooms_verbs (
@@ -18,11 +23,11 @@ def init_db():
             level_weight INTEGER NOT NULL
         )
     ''')
-    
+
     # Check if empty
     cursor.execute('SELECT COUNT(*) FROM blooms_verbs')
     count = cursor.fetchone()[0]
-    
+
     if count == 0:
         # Load seed data
         if os.path.exists(SEED_FILE):
@@ -34,8 +39,9 @@ def init_db():
                         VALUES (?, ?, ?)
                     ''', (v['verb'], v['taxonomy_level'], v['level_weight']))
         conn.commit()
-    
+
     conn.close()
+
 
 def get_verb_info(verb: str):
     conn = sqlite3.connect(DB_FILE)
@@ -46,6 +52,7 @@ def get_verb_info(verb: str):
     if row:
         return {"taxonomy_level": row[0], "level_weight": row[1]}
     return None
+
 
 if __name__ == "__main__":
     init_db()

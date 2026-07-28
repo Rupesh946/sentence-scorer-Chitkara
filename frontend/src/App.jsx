@@ -14,7 +14,8 @@ function App() {
     setLoading(true);
     setError(null);
     try {
-      const response = await axios.post('http://localhost:8000/evaluate', {
+      const endpoint = import.meta.env.PROD ? '/api/evaluate' : 'http://localhost:8000/api/evaluate';
+      const response = await axios.post(endpoint, {
         sentence: sentence
       });
       setResult(response.data);
