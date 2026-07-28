@@ -1,0 +1,52 @@
+import sqlite3
+import json
+import os
+
+DB_FILE = "blooms.db"
+SEED_FILE = "blooms_verbs.json"
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    # Create table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS blooms_verbs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            verb TEXT UNIQUE NOT NULL,
+            taxonomy_level TEXT NOT NULL,
+            level_weight INTEGER NOT NULL
+        )
+    ''')
+    
+    # Check if empty
+    cursor.execute('SELECT COUNT(*) FROM blooms_verbs')
+    count = cursor.fetchone()[0]
+    
+    if count == 0:
+        # Load seed data
+        if os.path.exists(SEED_FILE):
+            with open(SEED_FILE, 'r') as f:
+                verbs = json.load(f)
+                for v in verbs:
+                    cursor.execute('''
+                        INSERT INTO blooms_verbs (verb, taxonomy_level, level_weight)
+                        VALUES (?, ?, ?)
+                    ''', (v['verb'], v['taxonomy_level'], v['level_weight']))
+        conn.commit()
+    
+    conn.close()
+
+def get_verb_info(verb: str):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('SELECT taxonomy_level, level_weight FROM blooms_verbs WHERE verb = ?', (verb.lower(),))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return {"taxonomy_level": row[0], "level_weight": row[1]}
+    return None
+
+if __name__ == "__main__":
+    init_db()
+    print("Database initialized.")

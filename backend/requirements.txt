@@ -1,0 +1,7 @@
+fastapi==0.110.1
+uvicorn==0.29.0
+spacy==3.7.4
+anthropic==0.25.7
+groq
+pydantic==2.7.0
+python-dotenv==1.0.1
