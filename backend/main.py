@@ -35,7 +35,11 @@ async def evaluate(request: EvaluateRequest):
         raise HTTPException(status_code=400, detail="Sentence cannot be empty.")
 
     try:
-        response = evaluate_sentence(request.sentence)
+        response = evaluate_sentence(
+            request.sentence,
+            condition=request.condition,
+            criteria=request.criteria,
+        )
         return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

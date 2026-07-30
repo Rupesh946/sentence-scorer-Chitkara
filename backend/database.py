@@ -24,22 +24,16 @@ def init_db():
         )
     ''')
 
-    # Check if empty
-    cursor.execute('SELECT COUNT(*) FROM blooms_verbs')
-    count = cursor.fetchone()[0]
-
-    if count == 0:
-        # Load seed data
-        if os.path.exists(SEED_FILE):
-            with open(SEED_FILE, 'r') as f:
-                verbs = json.load(f)
-                for v in verbs:
-                    cursor.execute('''
-                        INSERT INTO blooms_verbs (verb, taxonomy_level, level_weight)
-                        VALUES (?, ?, ?)
-                    ''', (v['verb'], v['taxonomy_level'], v['level_weight']))
-        conn.commit()
-
+    # Load seed data
+    if os.path.exists(SEED_FILE):
+        with open(SEED_FILE, 'r') as f:
+            verbs = json.load(f)
+            for v in verbs:
+                cursor.execute('''
+                    INSERT OR REPLACE INTO blooms_verbs (verb, taxonomy_level, level_weight)
+                    VALUES (?, ?, ?)
+                ''', (v['verb'], v['taxonomy_level'], v['level_weight']))
+    conn.commit()
     conn.close()
 
 

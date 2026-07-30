@@ -12,6 +12,7 @@
   {"verb": "classify", "taxonomy_level": "Understand", "level_weight": 2},
   {"verb": "discuss", "taxonomy_level": "Understand", "level_weight": 2},
   {"verb": "apply", "taxonomy_level": "Apply", "level_weight": 3},
+  {"verb": "determine", "taxonomy_level": "Apply", "level_weight": 3},
   {"verb": "demonstrate", "taxonomy_level": "Apply", "level_weight": 3},
   {"verb": "calculate", "taxonomy_level": "Apply", "level_weight": 3},
   {"verb": "use", "taxonomy_level": "Apply", "level_weight": 3},

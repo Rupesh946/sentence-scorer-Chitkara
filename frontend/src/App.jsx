@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import axios from 'axios';
-import { Target, CheckCircle2, AlertCircle, Loader2, Sparkles } from 'lucide-react';
+import { Target, CheckCircle2, AlertCircle, Loader2, Sparkles, MinusCircle } from 'lucide-react';
 
 function App() {
   const [sentence, setSentence] = useState('');
+  const [condition, setCondition] = useState('');
+  const [criteria, setCriteria] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
@@ -16,7 +18,9 @@ function App() {
     try {
       const endpoint = import.meta.env.PROD ? '/api/evaluate' : 'http://localhost:8000/api/evaluate';
       const response = await axios.post(endpoint, {
-        sentence: sentence
+        sentence: sentence,
+        condition: condition.trim() || null,
+        criteria: criteria.trim() || null,
       });
       setResult(response.data);
     } catch (err) {
@@ -46,30 +50,65 @@ function App() {
             Objective Sentence Scorer
           </h1>
           <p className="text-lg text-gray-500 max-w-2xl mx-auto font-medium">
-            Evaluate your learning objectives based on Bloom's Taxonomy and the ABCD model.
+            Evaluate your learning objectives using Bloom's Taxonomy — Action, Knowledge, Condition &amp; Criteria.
           </p>
         </div>
 
         {/* Input Section */}
         <div className="bg-white rounded-2xl shadow-xl shadow-indigo-100/50 p-8 border border-gray-100 transition-all hover:shadow-2xl hover:shadow-indigo-100/60 duration-300">
-          <div className="space-y-4">
-            <label htmlFor="sentence" className="block text-sm font-semibold text-gray-700 uppercase tracking-wider">
-              Learning Objective
-            </label>
-            <textarea
-              id="sentence"
-              rows="3"
-              className="w-full rounded-xl border-gray-200 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-4 text-lg bg-gray-50/50 placeholder:text-gray-400 transition-colors"
-              placeholder='e.g., "Students will be able to analyze data using Excel with 90% accuracy."'
-              value={sentence}
-              onChange={(e) => setSentence(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleScore();
-                }
-              }}
-            />
+          <div className="space-y-5">
+            <div>
+              <label htmlFor="sentence" className="block text-sm font-semibold text-gray-700 uppercase tracking-wider">
+                Learning Objective (Action + Knowledge)
+              </label>
+              <textarea
+                id="sentence"
+                rows="3"
+                className="mt-2 w-full rounded-xl border-gray-200 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-4 text-lg bg-gray-50/50 placeholder:text-gray-400 transition-colors"
+                placeholder='e.g. "Determine the root of the given equation"'
+                value={sentence}
+                onChange={(e) => setSentence(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleScore();
+                  }
+                }}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label htmlFor="condition" className="block text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Condition <span className="text-gray-400 normal-case">(optional)</span>
+                </label>
+                <input
+                  id="condition"
+                  type="text"
+                  className="mt-1 w-full rounded-lg border-gray-200 shadow-sm focus:border-indigo-400 focus:ring-indigo-400 p-3 text-sm bg-gray-50/50 placeholder:text-gray-400 transition-colors"
+                  placeholder='e.g. "using Newton-Raphson method through C++"'
+                  value={condition}
+                  onChange={(e) => setCondition(e.target.value)}
+                />
+              </div>
+              <div>
+                <label htmlFor="criteria" className="block text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Criteria <span className="text-gray-400 normal-case">(optional)</span>
+                </label>
+                <input
+                  id="criteria"
+                  type="text"
+                  className="mt-1 w-full rounded-lg border-gray-200 shadow-sm focus:border-indigo-400 focus:ring-indigo-400 p-3 text-sm bg-gray-50/50 placeholder:text-gray-400 transition-colors"
+                  placeholder='e.g. "accurate to second decimal place"'
+                  value={criteria}
+                  onChange={(e) => setCriteria(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <p className="text-xs text-gray-400 italic">
+              Tip: a strong objective includes what tool/method you'll use (condition) and how success is measured (criteria).
+            </p>
             <div className="flex justify-end">
               <button
                 onClick={handleScore}
@@ -115,34 +154,74 @@ function App() {
             </div>
 
             {/* Breakdown Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              
-              {/* Action Verb */}
-              <div className={`rounded-2xl p-6 border-2 transition-all hover:-translate-y-1 ${getScoreColor(result.breakdown.action_verb.score, 4)}`}>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+
+              {/* Action / Bloom's Level */}
+              <div className={`rounded-2xl p-6 border-2 transition-all hover:-translate-y-1 ${getScoreColor(result.breakdown.action.score, 4)}`}>
                 <div className="flex justify-between items-start mb-4">
                   <div>
                     <h3 className="font-bold text-lg flex items-center gap-2">
                       <CheckCircle2 className="w-5 h-5" />
-                      Action Verb
+                      Action
                     </h3>
                     <span className="text-sm font-semibold opacity-75 mt-1 block uppercase tracking-wider">
-                      {result.breakdown.action_verb.bloom_level || 'Unknown'} Level
+                      {result.breakdown.action.bloom_level || 'Unknown'}
+                    </span>
+                    <span className="text-xs opacity-60 mt-0.5 block italic">
+                      verb: "{result.breakdown.action.verb}"
                     </span>
                   </div>
                   <div className="text-2xl font-black bg-white/50 px-3 py-1 rounded-lg backdrop-blur-sm shadow-sm">
-                    {result.breakdown.action_verb.score}/4
+                    {result.breakdown.action.score}/4
                   </div>
                 </div>
-                <p className="text-sm font-medium leading-relaxed opacity-90">{result.breakdown.action_verb.feedback}</p>
+                <p className="text-sm font-medium leading-relaxed opacity-90">{result.breakdown.action.feedback}</p>
+              </div>
+
+              {/* Knowledge */}
+              <div className={`rounded-2xl p-6 border-2 transition-all hover:-translate-y-1 ${getScoreColor(result.breakdown.knowledge.score, 2)}`}>
+                <div className="flex justify-between items-start mb-4">
+                  <div>
+                    <h3 className="font-bold text-lg flex items-center gap-2">
+                      <CheckCircle2 className="w-5 h-5" />
+                      Knowledge
+                    </h3>
+                    {result.breakdown.knowledge.detected_knowledge && (
+                      <span className="text-xs opacity-60 mt-0.5 block italic">
+                        "{result.breakdown.knowledge.detected_knowledge}"
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-2xl font-black bg-white/50 px-3 py-1 rounded-lg backdrop-blur-sm shadow-sm">
+                    {result.breakdown.knowledge.score}/2
+                  </div>
+                </div>
+                <p className="text-sm font-medium leading-relaxed opacity-90">{result.breakdown.knowledge.feedback}</p>
               </div>
 
               {/* Condition */}
-              <div className={`rounded-2xl p-6 border-2 transition-all hover:-translate-y-1 ${getScoreColor(result.breakdown.condition.score, 2)}`}>
+              <div className={`rounded-2xl p-6 border-2 transition-all hover:-translate-y-1 ${
+                result.breakdown.condition.detected
+                  ? getScoreColor(result.breakdown.condition.score, 2)
+                  : 'text-gray-400 bg-gray-50 border-gray-200'
+              }`}>
                 <div className="flex justify-between items-start mb-4">
-                  <h3 className="font-bold text-lg flex items-center gap-2">
-                    <CheckCircle2 className="w-5 h-5" />
-                    Condition
-                  </h3>
+                  <div>
+                    <h3 className="font-bold text-lg flex items-center gap-2">
+                      {result.breakdown.condition.detected
+                        ? <CheckCircle2 className="w-5 h-5" />
+                        : <MinusCircle className="w-5 h-5" />}
+                      Condition
+                    </h3>
+                    {result.breakdown.condition.detected && result.breakdown.condition.condition_text && (
+                      <span className="text-xs opacity-60 mt-0.5 block italic">
+                        "{result.breakdown.condition.condition_text}"
+                      </span>
+                    )}
+                    {!result.breakdown.condition.detected && (
+                      <span className="text-xs opacity-50 mt-0.5 block italic">Not provided (optional)</span>
+                    )}
+                  </div>
                   <div className="text-2xl font-black bg-white/50 px-3 py-1 rounded-lg backdrop-blur-sm shadow-sm">
                     {result.breakdown.condition.score}/2
                   </div>
@@ -150,32 +229,34 @@ function App() {
                 <p className="text-sm font-medium leading-relaxed opacity-90">{result.breakdown.condition.feedback}</p>
               </div>
 
-              {/* Criterion */}
-              <div className={`rounded-2xl p-6 border-2 transition-all hover:-translate-y-1 ${getScoreColor(result.breakdown.criterion.score, 2)}`}>
+              {/* Criteria */}
+              <div className={`rounded-2xl p-6 border-2 transition-all hover:-translate-y-1 ${
+                result.breakdown.criteria.detected
+                  ? getScoreColor(result.breakdown.criteria.score, 2)
+                  : 'text-gray-400 bg-gray-50 border-gray-200'
+              }`}>
                 <div className="flex justify-between items-start mb-4">
-                  <h3 className="font-bold text-lg flex items-center gap-2">
-                    <CheckCircle2 className="w-5 h-5" />
-                    Criterion
-                  </h3>
+                  <div>
+                    <h3 className="font-bold text-lg flex items-center gap-2">
+                      {result.breakdown.criteria.detected
+                        ? <CheckCircle2 className="w-5 h-5" />
+                        : <MinusCircle className="w-5 h-5" />}
+                      Criteria
+                    </h3>
+                    {result.breakdown.criteria.detected && result.breakdown.criteria.criteria_text && (
+                      <span className="text-xs opacity-60 mt-0.5 block italic">
+                        "{result.breakdown.criteria.criteria_text}"
+                      </span>
+                    )}
+                    {!result.breakdown.criteria.detected && (
+                      <span className="text-xs opacity-50 mt-0.5 block italic">Not provided (optional)</span>
+                    )}
+                  </div>
                   <div className="text-2xl font-black bg-white/50 px-3 py-1 rounded-lg backdrop-blur-sm shadow-sm">
-                    {result.breakdown.criterion.score}/2
+                    {result.breakdown.criteria.score}/2
                   </div>
                 </div>
-                <p className="text-sm font-medium leading-relaxed opacity-90">{result.breakdown.criterion.feedback}</p>
-              </div>
-
-              {/* Clarity */}
-              <div className={`rounded-2xl p-6 border-2 transition-all hover:-translate-y-1 ${getScoreColor(result.breakdown.clarity.score, 2)}`}>
-                <div className="flex justify-between items-start mb-4">
-                  <h3 className="font-bold text-lg flex items-center gap-2">
-                    <CheckCircle2 className="w-5 h-5" />
-                    Clarity
-                  </h3>
-                  <div className="text-2xl font-black bg-white/50 px-3 py-1 rounded-lg backdrop-blur-sm shadow-sm">
-                    {result.breakdown.clarity.score}/2
-                  </div>
-                </div>
-                <p className="text-sm font-medium leading-relaxed opacity-90">{result.breakdown.clarity.feedback}</p>
+                <p className="text-sm font-medium leading-relaxed opacity-90">{result.breakdown.criteria.feedback}</p>
               </div>
 
             </div>

@@ -1,0 +1,341 @@
+================================================================================
+  ARCHITECTURE — Bloom's Taxonomy Course Outcome (CO) Sentence Scorer
+================================================================================
+
+  Project: Sentence Scorer
+  Repository: arorayug07/sentance-scorer
+  Last Updated: 2026-07-28
+
+================================================================================
+  1. HIGH-LEVEL OVERVIEW
+================================================================================
+
+  This is a full-stack web application that evaluates Course Outcome (CO)
+  learning objective sentences using Bloom's Taxonomy. A user provides a main
+  learning objective sentence along with optional Condition and Criteria inputs.
+  The backend processes the inputs through a two-stage hybrid pipeline:
+    1. Rule-based spaCy NLP + SQLite database verb lookup
+    2. LLM evaluation via Groq (LLaMA 3.3 70B Versatile)
+
+  The system returns a structured 10-point score across 4 Course Outcome
+  components: Action, Knowledge, Condition, and Criteria, alongside detailed
+  feedback and an improved 10/10 example sentence.
+
+  User (Browser)
+      │
+      │  HTTP POST /api/evaluate { sentence, condition, criteria }
+      ▼
+  ┌─────────────┐        ┌─────────────────────────────────────────────────┐
+  │   Frontend  │ ──────▶│               Backend (FastAPI)                 │
+  │  React/Vite │        │                                                 │
+  │  Port 5173  │◀─────── │  1. build_full_text() → sentence+cond+crit     │
+  └─────────────┘  JSON  │  2. spaCy NLP → Action verb + Knowledge phrase  │
+                         │  3. SQLite DB → Bloom's verb taxonomy lookup    │
+                         │  4. Groq LLM  → CO 4-component evaluation       │
+                         │  5. Backend Validation → Sentiment & sub-scores│
+                         └─────────────────────────────────────────────────┘
+                                           │
+                                           ▼
+                                  Groq API (LLaMA 3.3 70B)
+                                  (external, cloud)
+
+
+================================================================================
+  2. PROJECT DIRECTORY STRUCTURE
+================================================================================
+
+  Project1/
+  ├── ARCHITECTURE.txt          ← System architecture documentation (this file)
+  ├── vercel.json               ← Deployment routing config (Vercel)
+  ├── .gitignore
+  │
+  ├── backend/                  ← Python / FastAPI backend service
+  │   ├── main.py               ← App entry point, CORS middleware, API endpoint
+  │   ├── models.py             ← Pydantic request & response data models
+  │   ├── nlp_scorer.py         ← Core scoring engine (NLP + LLM + validation)
+  │   ├── database.py           ← SQLite setup & verb taxonomy lookup
+  │   ├── blooms_verbs.json     ← Seed data: Bloom's verbs & cognitive levels
+  │   ├── blooms.db             ← SQLite database (auto-seeded on startup)
+  │   ├── requirements.txt      ← Python package dependencies
+  │   ├── .env                  ← Local environment secrets (GROQ_API_KEY)
+  │   ├── .env.example          ← Environment variable template
+  │   ├── test_models.py        ← Pydantic model verification tests
+  │   └── venv/                 ← Python virtual environment
+  │
+  └── frontend/                 ← React 19 / Vite 8 single-page application
+      ├── src/
+      │   ├── App.jsx           ← Main UI component (Inputs, Cards, Comparison)
+      │   ├── main.jsx          ← React DOM mounting entry point
+      │   └── index.css         ← Global styles (Tailwind CSS v4)
+      ├── public/               ← Static web assets
+      ├── index.html            ← HTML entry shell
+      ├── package.json          ← Frontend dependencies and scripts
+      ├── vite.config.js        ← Vite bundler configuration
+      ├── tailwind.config.js    ← Tailwind CSS configuration
+      └── postcss.config.js     ← PostCSS pipeline configuration
+
+
+================================================================================
+  3. BACKEND ARCHITECTURE
+================================================================================
+
+  Runtime:   Python 3.x
+  Server:    Uvicorn (ASGI)
+  Framework: FastAPI
+
+  ┌────────────────────────────────────────────────────────────┐
+  │  main.py                                                   │
+  │  ───────────────────────────────────────────────────────── │
+  │  • Loads .env on startup via python-dotenv                 │
+  │  • Executes init_db() to initialize & seed SQLite database │
+  │  • Configures CORS middleware (ALLOWED_ORIGIN env support) │
+  │  • Exposes POST /api/evaluate endpoint:                    │
+  │      Payload:  EvaluateRequest                             │
+  │      Response: EvaluateResponse                            │
+  └────────────────────────────────────────────────────────────┘
+            │
+            ▼
+  ┌────────────────────────────────────────────────────────────┐
+  │  nlp_scorer.py (Core Scoring & Extraction Engine)          │
+  │  ───────────────────────────────────────────────────────── │
+  │                                                            │
+  │  1. build_full_text(sentence, condition, criteria)        │
+  │     Combines inputs into one unified string for scanning   │
+  │                                                            │
+  │  2. Rule-Based NLP & Database Lookup                       │
+  │     • extract_main_verb(sentence)                          │
+  │       - Parses sentence using spaCy en_core_web_sm         │
+  │       - Identifies ROOT action verb lemma                  │
+  │     • get_verb_info(verb)                                  │
+  │       - Queries SQLite table for taxonomy level & weight   │
+  │     • extract_knowledge_phrase(sentence, verb)             │
+  │       - Extracts direct object phrase from sentence        │
+  │       - Trims phrase at first condition/criteria marker    │
+  │     • Regex Pattern Scans                                  │
+  │       - Scans full_text for Condition/Criteria markers     │
+  │       - Checks sentence for vague words (like, etc., etc.) │
+  │                                                            │
+  │  3. LLM Evaluation (Groq LLaMA 3.3 70B)                    │
+  │     • Sends structured prompt with few-shot CO examples    │
+  │     • Evaluates Action, Knowledge, Condition, Criteria     │
+  │     • Generates 10/10 improved combined objective          │
+  │                                                            │
+  │  4. Backend Validation Guard                               │
+  │     • Computes action.score = verb_validity + bloom_weight │
+  │     • Performs sentiment validation on action.feedback     │
+  │     • Overrides score to 4 if feedback is positive and     │
+  │       verb is a higher-order Bloom's level                 │
+  │     • Re-calculates total score = sum(subscores) ≤ 10      │
+  └────────────────────────────────────────────────────────────┘
+            │
+            ▼
+  ┌────────────────────────────────────────────────────────────┐
+  │  database.py                                               │
+  │  ───────────────────────────────────────────────────────── │
+  │  • init_db(): Ensures table blooms_verbs exists & upserts  │
+  │               seed data from blooms_verbs.json             │
+  │  • get_verb_info(verb): Queries taxonomy level and weight  │
+  └────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+  4. DATA MODELS (models.py)
+================================================================================
+
+  Request Model:
+  ┌────────────────────────────────────────────────────────────┐
+  │  EvaluateRequest                                           │
+  │  ───────────────────────────────────────────────────────── │
+  │  sentence  : str              (Required main sentence)    │
+  │  condition : Optional[str]    (Optional condition input)  │
+  │  criteria  : Optional[str]    (Optional criteria input)   │
+  └────────────────────────────────────────────────────────────┘
+
+  Response Model:
+  ┌────────────────────────────────────────────────────────────┐
+  │  EvaluateResponse                                          │
+  │  ───────────────────────────────────────────────────────── │
+  │  total_score        : int          (0–10)                  │
+  │  breakdown          : ScoreBreakdown                       │
+  │  overall_feedback   : str          (Summary assessment)    │
+  │  improved_objective : str          (Perfect 10/10 version) │
+  └────────────────────────────────────────────────────────────┘
+
+  Breakdown Model:
+  ┌────────────────────────────────────────────────────────────┐
+  │  ScoreBreakdown                                            │
+  │  ───────────────────────────────────────────────────────── │
+  │  action    : ActionScore                                   │
+  │  knowledge : KnowledgeScore                                │
+  │  condition : ConditionScore                                │
+  │  criteria  : CriteriaScore                                 │
+  └────────────────────────────────────────────────────────────┘
+
+  Sub-Component Models:
+  ┌───────────────────────────────────────────────────────────┐
+  │ ActionScore                                               │
+  │ ───────────────────────────────────────────────────────── │
+  │ score               : int            (0–4 points)         │
+  │ bloom_level         : str            (Remember..Create)   │
+  │ verb                : str            (Extracted verb)     │
+  │ feedback            : str            (Action feedback)    │
+  │ verb_validity_score : Optional[int]  (0–2 pts)            │
+  │ bloom_weight_score  : Optional[int]  (0–2 pts)            │
+  └───────────────────────────────────────────────────────────┘
+  ┌───────────────────────────────────────────────────────────┐
+  │ KnowledgeScore                                            │
+  │ ───────────────────────────────────────────────────────── │
+  │ score               : int            (0–2 points)         │
+  │ detected_knowledge  : str            (Trimmed topic)      │
+  │ feedback            : str            (Knowledge feedback) │
+  └───────────────────────────────────────────────────────────┘
+  ┌───────────────────────────────────────────────────────────┐
+  │ ConditionScore                                            │
+  │ ───────────────────────────────────────────────────────── │
+  │ score               : int            (0–2 points)         │
+  │ detected            : bool           (Found flag)         │
+  │ condition_text      : Optional[str]  (Extracted text)     │
+  │ feedback            : str            (Condition feedback) │
+  └───────────────────────────────────────────────────────────┘
+  ┌───────────────────────────────────────────────────────────┐
+  │ CriteriaScore                                             │
+  │ ───────────────────────────────────────────────────────── │
+  │ score               : int            (0–2 points)         │
+  │ detected            : bool           (Found flag)         │
+  │ criteria_text       : Optional[str]  (Extracted text)     │
+  │ feedback            : str            (Criteria feedback)  │
+  └───────────────────────────────────────────────────────────┘
+
+
+================================================================================
+  5. COURSE OUTCOME (CO) SCORING RUBRIC
+================================================================================
+
+  Total Score: 0–10 points across 4 components
+
+  ┌──────────────────┬────────┬────────────────────────────────────────────┐
+  │ Component        │ Max    │ Deterministic Rules & Sub-Scores           │
+  ├──────────────────┼────────┼────────────────────────────────────────────┤
+  │ 1. Action        │  4 pts │ Sum of two deterministic sub-components:   │
+  │                  │        │  a) verb_validity_score (0-2 pts):         │
+  │                  │        │     2 = Single valid verb / co-equal pair    │
+  │                  │        │     1 = Ambiguous, borderline, or >2 verbs   │
+  │                  │        │     0 = Missing or non-demonstrable verb     │
+  │                  │        │  b) bloom_weight_score (0-2 pts):          │
+  │                  │        │     2 = Apply, Analyze, Evaluate, Create     │
+  │                  │        │     1 = Understand                             │
+  │                  │        │     0 = Remember or missing                  │
+  ├──────────────────┼────────┼────────────────────────────────────────────┤
+  │ 2. Knowledge     │  2 pts │ Direct object complement of action verb:   │
+  │                  │        │     2 = Concrete, specific knowledge element │
+  │                  │        │     1 = Present but vague (like, etc., etc.) │
+  │                  │        │     0 = Missing or generic topic             │
+  ├──────────────────┼────────┼────────────────────────────────────────────┤
+  │ 3. Condition     │  2 pts │ Method, tool, or circumstance:             │
+  │                  │        │     2 = Specific method/tool/context named   │
+  │                  │        │     1 = Vague condition phrase               │
+  │                  │        │     0 = Not provided/detected (Optional)     │
+  ├──────────────────┼────────┼────────────────────────────────────────────┤
+  │ 4. Criteria      │  2 pts │ Measurable standard of performance:        │
+  │                  │        │     2 = Specific, checkable threshold      │
+  │                  │        │     1 = Vague standard (e.g., "correctly")   │
+  │                  │        │     0 = Not provided/detected (Optional)     │
+  └──────────────────┴────────┴────────────────────────────────────────────┘
+
+
+================================================================================
+  6. FRONTEND ARCHITECTURE
+================================================================================
+
+  Runtime:   Node.js
+  Framework: React 19 (Vite 8)
+  Styling:   Tailwind CSS v4
+  Icons:     Lucide React
+  HTTP:      Axios
+
+  Single-Page Application (App.jsx)
+
+  State Variables:
+    sentence  (string) — Main learning objective input (Action + Knowledge)
+    condition (string) — Optional Condition input
+    criteria  (string) — Optional Criteria input
+    loading   (bool)   — API request status
+    result    (object) — EvaluateResponse payload
+    error     (string) — Error alert message
+
+  UI Structure:
+    1. Header          — App title & Bloom's Taxonomy description
+    2. Form Container  — Main textarea + 2 optional secondary text inputs
+    3. Total Score     — Score display (out of 10) + overall feedback banner
+    4. Breakdown Grid  — 4-column responsive grid:
+                         - Action card (0–4) with Bloom's level badge
+                         - Knowledge card (0–2) with extracted phrase
+                         - Condition card (0–2) with detected/muted state
+                         - Criteria card (0–2) with detected/muted state
+    5. Comparison      — Side-by-side widget: Original vs 10/10 Improved Version
+
+
+================================================================================
+  7. DEPLOYMENT ARCHITECTURE (Vercel)
+================================================================================
+
+  vercel.json configures multi-service deployment:
+
+  ┌────────────────────────────────────────────────────────┐
+  │  Vercel Edge Gateway                                   │
+  │                                                        │
+  │  /api/*  ──────────────────▶  Backend Service (FastAPI)│
+  │                               root: ./backend          │
+  │                                                        │
+  │  /*  ──────────────────────▶  Frontend Service (Vite)  │
+  │                               root: ./frontend         │
+  └────────────────────────────────────────────────────────┘
+
+  Environment Variables:
+    GROQ_API_KEY    — API key for Groq Cloud LLaMA 3.3 70B inference
+    ALLOWED_ORIGIN  — CORS allowed origin domain
+    DB_PATH         — SQLite database file path override
+
+
+================================================================================
+  8. DEPENDENCIES
+================================================================================
+
+  Backend (requirements.txt):
+    • fastapi (0.110.1) — ASGI web framework
+    • uvicorn (0.29.0) — High-performance web server
+    • pydantic (2.7.0) — Data validation and schema parsing
+    • spacy (3.7.4) — NLP engine for dependency parsing & lemmatization
+    • en_core_web_sm (3.7.1) — spaCy English pipeline
+    • groq (0.9.0) — Official Groq SDK
+    • python-dotenv (1.0.1) — Environment variable management
+
+  Frontend (package.json):
+    • react (19.2.7) / react-dom (19.2.7) — Core UI framework
+    • vite (8.1.1) — Next-gen frontend toolchain
+    • tailwindcss (4.3.3) — Utility-first styling framework
+    • lucide-react (1.27.0) — Modern UI icon library
+    • axios (1.18.1) — Promise-based HTTP client
+
+
+================================================================================
+  9. END-TO-END DATA FLOW
+================================================================================
+
+  1. User fills the main objective sentence and optional Condition/Criteria inputs.
+  2. Frontend sends HTTP POST request to `/api/evaluate` containing:
+       { "sentence": "...", "condition": "...", "criteria": "..." }
+  3. FastAPI receives request and calls `evaluate_sentence()`.
+  4. Scorer combines inputs via `build_full_text()`.
+  5. spaCy parses main sentence, extracts ROOT action verb, queries SQLite DB,
+     and extracts the Knowledge phrase (trimmed at boundary markers).
+  6. Scorer sends prompt to Groq (LLaMA 3.3 70B) for 4-component scoring.
+  7. Backend validation verifies Action sub-scores (`verb_validity` + `bloom_weight`)
+     and sentiment consistency, overriding mismatches to guarantee accuracy.
+  8. Total score is computed and returned to the React frontend.
+  9. React renders total score, 4-card breakdown grid, and comparison widget.
+
+
+================================================================================
+  END OF ARCHITECTURE DOCUMENT
+================================================================================
