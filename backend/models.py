@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, Field
+from typing import List, Optional, Union
 
 class EvaluateRequest(BaseModel):
     sentence: str
@@ -17,6 +17,10 @@ class ActionScore(BaseModel):
 class KnowledgeScore(BaseModel):
     score: int            # 0-2
     detected_knowledge: str   # what the verb acts on
+    knowledge_dimension: List[str] = Field(default_factory=list)
+    too_general: bool = False
+    is_process_not_product: bool = False
+    is_merged_cos: bool = False
     feedback: str
 
 class ConditionScore(BaseModel):
@@ -37,8 +41,16 @@ class ScoreBreakdown(BaseModel):
     condition: ConditionScore
     criteria: CriteriaScore
 
+class SuggestedAssessmentTools(BaseModel):
+    available: bool
+    bloom_level: Optional[Union[str, List[str]]] = None
+    tools: Optional[List[str]] = None
+    note: str
+    reason: Optional[str] = None
+
 class EvaluateResponse(BaseModel):
     total_score: int            # 0-10
     breakdown: ScoreBreakdown
+    suggested_assessment_tools: SuggestedAssessmentTools
     overall_feedback: str
     improved_objective: str

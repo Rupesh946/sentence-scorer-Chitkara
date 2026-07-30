@@ -7,6 +7,7 @@ from database import get_verb_info
 from models import (
     EvaluateResponse, ScoreBreakdown,
     ActionScore, KnowledgeScore, ConditionScore, CriteriaScore,
+    SuggestedAssessmentTools,
 )
 
 # Load spacy model
@@ -90,6 +91,56 @@ VAGUE_KNOWLEDGE_WORDS = [
 
 VAGUE_VERBS = {"know", "understand", "learn", "appreciate", "study"}
 
+BLOOM_ASSESSMENT_MAP = {
+    "Remember": {
+        "tools": ["MCQs", "Quizzes", "Oral questions"],
+        "note": "This objective is at the Remember level - quick recall-based checks like MCQs or oral questions are the most efficient way to test it.",
+    },
+    "Understand": {
+        "tools": ["Short answers", "Concept maps", "Explanations"],
+        "note": "This objective is at the Understand level - ask students to explain it in their own words or map out the concept, rather than just recall it.",
+    },
+    "Apply": {
+        "tools": ["Numerical problems", "Programming", "Lab work"],
+        "note": "This objective is at the Apply level - hands-on tasks like solving numerical problems or lab work test this better than a written quiz.",
+    },
+    "Analyze": {
+        "tools": ["Case studies", "Data analysis", "Comparative studies"],
+        "note": "This objective is at the Analyze level - case studies or comparative analysis reveal whether a student can actually break the topic down, not just recite it.",
+    },
+    "Evaluate": {
+        "tools": ["Reviews", "Critiques", "Viva", "Panel discussions"],
+        "note": "This objective is at the Evaluate level - a viva or critique session tests judgment in a way a written test can't.",
+    },
+    "Create": {
+        "tools": ["Capstone projects", "Product design", "Innovation challenges"],
+        "note": "This objective is at the Create level - only an open-ended project or design challenge can really demonstrate this.",
+    },
+}
+
+ASSESSMENT_TOOLS_UNAVAILABLE_REASON = (
+    "Add a clear, demonstrable action verb (e.g. 'analyze', 'design', "
+    "'calculate') first - we can suggest the right assessment tools once we "
+    "know the Bloom's level."
+)
+
+KNOWLEDGE_DIMENSIONS = {
+    "Factual",
+    "Conceptual",
+    "Procedural",
+    "Metacognitive",
+}
+
+# Source-material calibration cases take precedence over an otherwise LLM-led
+# classification, where some phrases have multiple defensible interpretations.
+KNOWLEDGE_DIMENSION_CALIBRATIONS = {
+    "root of the given equation": ["Conceptual", "Procedural"],
+    "network latency components for the local area network": ["Conceptual", "Procedural"],
+    "terminology used in computer network": ["Factual"],
+    "machine learning model to predict mood w.r.t. public policy questions": ["Conceptual", "Procedural"],
+    "data and control path for a mvc architecture": ["Conceptual", "Procedural"],
+}
+
 
 def extract_main_verb(sentence: str) -> str:
     """Extract the main (root) verb lemma from a sentence using spaCy."""
@@ -117,6 +168,50 @@ def count_action_verbs(sentence: str) -> list[str]:
         if token.pos_ == "VERB" and token.dep_ not in ("aux", "auxpass"):
             verbs.append(token.lemma_.lower())
     return verbs
+
+
+def extract_coequal_verb_knowledge_pairs(sentence: str) -> list[dict[str, str]]:
+    """Extract the root action and one coordinated action with their targets."""
+    doc = nlp(sentence)
+    action_tokens = [
+        token for token in doc
+        if token.pos_ == "VERB" and (token.dep_ == "ROOT" or token.dep_ == "conj")
+    ]
+    if len(action_tokens) != 2:
+        # Imperative objectives with title-cased verbs can be mis-tagged by the
+        # parser (for example, "Construct and Test a model"). Recognize only
+        # the leading coordinated-verb form and require both to be Bloom verbs.
+        leading_pair = re.match(r"^\s*([A-Za-z]+)\s+and\s+([A-Za-z]+)\s+(.+)$", sentence)
+        if not leading_pair:
+            return []
+        first_verb, second_verb, remainder = leading_pair.groups()
+        first_verb = first_verb.lower()
+        second_verb = second_verb.lower()
+        if not get_verb_info(first_verb) or not get_verb_info(second_verb):
+            return []
+        knowledge = re.split(r"\b(?:to|using|through|via|with)\b", remainder, maxsplit=1, flags=re.IGNORECASE)[0]
+        knowledge = knowledge.strip(" ,;.")
+        return [
+            {"verb": first_verb, "knowledge": knowledge},
+            {"verb": second_verb, "knowledge": knowledge},
+        ]
+
+    def object_text(token):
+        for child in token.children:
+            if child.dep_ in {"dobj", "obj", "attr", "oprd"}:
+                return " ".join(part.text for part in child.subtree).strip(" ,;.")
+        return ""
+
+    root_object = object_text(action_tokens[0])
+    pairs = []
+    for token in action_tokens:
+        knowledge = object_text(token)
+        # In "Construct and test a model", the coordinated verb inherits the
+        # root verb's object even though the parser attaches it only once.
+        if not knowledge and token.dep_ == "conj":
+            knowledge = root_object
+        pairs.append({"verb": token.lemma_.lower(), "knowledge": knowledge})
+    return pairs
 
 
 def extract_knowledge_phrase(sentence: str, verb: str) -> str:
@@ -155,6 +250,259 @@ def build_full_text(sentence: str,
     if criteria and criteria.strip():
         parts.append(criteria.strip())
     return " ".join(parts)
+
+
+def build_assessment_tools_suggestion(action_data: dict,
+                                      rule_findings: dict) -> SuggestedAssessmentTools:
+    """Recommend assessment tools from valid Bloom level(s) without scoring."""
+    if action_data.get("score", 0) <= 0:
+        return SuggestedAssessmentTools(
+            available=False,
+            bloom_level=None,
+            tools=None,
+            note=ASSESSMENT_TOOLS_UNAVAILABLE_REASON,
+            reason=ASSESSMENT_TOOLS_UNAVAILABLE_REASON,
+        )
+
+    levels = []
+    for verb in rule_findings.get("all_verbs", []):
+        info = get_verb_info(verb)
+        if not info:
+            continue
+        level = info["taxonomy_level"]
+        if level in BLOOM_ASSESSMENT_MAP and level not in levels:
+            levels.append(level)
+
+    action_level = action_data.get("bloom_level")
+    if not levels and action_level in BLOOM_ASSESSMENT_MAP:
+        levels.append(action_level)
+
+    if not levels:
+        return SuggestedAssessmentTools(
+            available=False,
+            bloom_level=None,
+            tools=None,
+            note=ASSESSMENT_TOOLS_UNAVAILABLE_REASON,
+            reason=ASSESSMENT_TOOLS_UNAVAILABLE_REASON,
+        )
+
+    tools = []
+    for level in levels:
+        for tool in BLOOM_ASSESSMENT_MAP[level]["tools"]:
+            if tool not in tools:
+                tools.append(tool)
+
+    if len(levels) == 1:
+        note = BLOOM_ASSESSMENT_MAP[levels[0]]["note"]
+        bloom_level = levels[0]
+    else:
+        level_text = " and ".join(levels)
+        note = (
+            f"This objective spans two levels - {level_text} - so use a blend "
+            "of assessment methods that checks both the lower-level skill and "
+            "the higher-order performance."
+        )
+        bloom_level = levels
+
+    return SuggestedAssessmentTools(
+        available=True,
+        bloom_level=bloom_level,
+        tools=tools,
+        note=note,
+        reason=None,
+    )
+
+
+def classify_knowledge_dimension(knowledge_phrase: str, sentence: str) -> list[str]:
+    """Classify the knowledge target using Revised Bloom's knowledge dimension."""
+    if not groq_client or not knowledge_phrase:
+        return []
+
+    normalized_phrase = re.sub(r"\s+", " ", knowledge_phrase.strip().lower())
+    normalized_phrase = re.sub(r"^(?:the|a|an)\s+", "", normalized_phrase)
+    calibrated_dimensions = KNOWLEDGE_DIMENSION_CALIBRATIONS.get(normalized_phrase)
+    if calibrated_dimensions:
+        return calibrated_dimensions
+
+    prompt = f"""You classify the Knowledge Dimension in Revised Bloom's Taxonomy.
+
+Full learning objective: "{sentence}"
+Extracted knowledge phrase: "{knowledge_phrase}"
+
+Choose one or two applicable categories only:
+- Factual: discrete facts, terminology, specific details.
+- Conceptual: relationships, principles, models, classifications.
+- Procedural: methods, techniques, algorithms, step-based processes.
+- Metacognitive: self-awareness, strategy selection, or reflection on one's own learning/performance.
+
+The following calibration examples are binding. When the knowledge phrase matches
+or is materially the same as one, return the listed categories exactly:
+- "root of the given equation" -> ["Conceptual", "Procedural"]
+- "network latency components for the Local Area Network" -> ["Conceptual", "Procedural"]
+- "terminology used in Computer Network" -> ["Factual"]
+- "machine learning model to predict mood w.r.t. public policy questions" -> ["Conceptual", "Procedural"]
+- "data and control path for a MVC architecture" -> ["Conceptual", "Procedural"]
+
+Return only JSON in this form:
+{{"knowledge_dimension": ["Conceptual"], "justification": "brief reason"}}"""
+
+    try:
+        completion = groq_client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            model="llama-3.3-70b-versatile",
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+        result = json.loads(completion.choices[0].message.content.strip())
+        dimensions = result.get("knowledge_dimension", [])
+        if not isinstance(dimensions, list):
+            return []
+        return [dimension for dimension in dimensions if dimension in KNOWLEDGE_DIMENSIONS][:2]
+    except Exception as error:
+        print("Failed to classify knowledge dimension:", str(error))
+        return []
+
+
+def check_knowledge_is_too_general(knowledge_phrase: str, sentence: str,
+                                  has_condition: bool = False,
+                                  has_criteria: bool = False) -> tuple[bool, str]:
+    """Identify circular knowledge targets that cannot support assessment design."""
+    if not groq_client or not knowledge_phrase:
+        return False, ""
+
+    # A named method/tool or measurable standard anchors the task sufficiently
+    # for assessment, even when the object uses wording such as "the given X".
+    if has_condition or has_criteria:
+        return False, "Assessment anchor detected."
+
+    prompt = f"""You review Course Outcome knowledge targets for assessment design.
+
+Full learning objective: "{sentence}"
+Extracted knowledge phrase: "{knowledge_phrase}"
+Detected condition (specific method/tool/technique): {has_condition}
+Detected criteria (measurable standard): {has_criteria}
+
+Is the knowledge phrase concrete and specific enough to design an assessment for?
+Flag it only when it is a generic restatement of the action, a circular reference,
+or has no real domain content. If either a condition or criteria is detected,
+you MUST return too_general=false: the named method/tool or measurable standard
+anchors the task, including phrases such as "the given equation". Only flag
+phrases with no anchor that use generic placeholder nouns such as "problems",
+"solutions", "techniques", "concepts", or "things" without naming actual
+subject matter. Do not flag a specific topic, domain, object, method, or
+measurable phenomenon.
+
+Calibration:
+- "Apply problem solving techniques to find solutions to problems." -> too_general: true
+- "Calculate the force on submerged surfaces." -> too_general: false
+- "Determine the root of the given equation, accurate to second decimal place, using Newton-Raphson method through C++ programming language." -> too_general: false
+
+Return only JSON:
+{{"too_general": false, "reason": "brief explanation"}}"""
+
+    try:
+        completion = groq_client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            model="llama-3.3-70b-versatile",
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+        result = json.loads(completion.choices[0].message.content.strip())
+        return bool(result.get("too_general", False)), str(result.get("reason", ""))
+    except Exception as error:
+        print("Failed to check knowledge specificity:", str(error))
+        return False, ""
+
+
+def check_process_not_product(sentence: str) -> tuple[bool, str]:
+    """Identify course activities that are not demonstrable end-state outcomes."""
+    if not groq_client:
+        return False, ""
+
+    prompt = f"""You review Course Outcomes for instructional design.
+
+Learning objective: "{sentence}"
+
+Does this describe a demonstrable end-state capability/product the student will
+have (a product), or an ongoing activity, process, or engagement during the
+course (a process)? Flag process framing when it reads like a course activity
+rather than an assessable outcome. Typical process signals include "study",
+"explore", "participate in", "engage with", "go through", "learn about",
+and "cover", or a syllabus-list phrase such as "variety of X and Y".
+
+Judge framing only, not whether the knowledge target is specific. A capability
+verb such as "apply", "calculate", "determine", "implement", or "compare"
+is product-framed even if its target is vague; a separate specificity check
+handles that issue. In particular, "Apply problem solving techniques to find
+solutions to problems" is NOT process-framed.
+
+Do not flag a student capability with a demonstrable deliverable, such as
+calculating a force, determining an equation root, implementing a data
+structure, or comparing alternatives.
+
+Calibration:
+- "Study variety of advanced abstract data type (ADT) and data structures and their Implementations." -> is_process_not_product: true
+- "Students will execute mini projects." -> is_process_not_product: true
+- "Calculate the force on submerged surfaces." -> is_process_not_product: false
+- "Determine the root of the given equation using Newton-Raphson method." -> is_process_not_product: false
+- "Apply problem solving techniques to find solutions to problems." -> is_process_not_product: false
+
+Return only JSON:
+{{"is_process_not_product": false, "reason": "brief explanation"}}"""
+
+    try:
+        completion = groq_client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            model="llama-3.3-70b-versatile",
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+        result = json.loads(completion.choices[0].message.content.strip())
+        return bool(result.get("is_process_not_product", False)), str(result.get("reason", ""))
+    except Exception as error:
+        print("Failed to check process versus product:", str(error))
+        return False, ""
+
+
+def check_coequal_verbs_share_knowledge(sentence: str,
+                                        verb_pairs: list[dict[str, str]]) -> tuple[bool, str]:
+    """Determine whether two coordinated action verbs describe one or two COs."""
+    if not groq_client or len(verb_pairs) != 2:
+        return False, ""
+
+    first, second = verb_pairs
+    prompt = f"""You review Course Outcomes for co-equal action verbs.
+
+Full learning objective: "{sentence}"
+First pair: verb="{first['verb']}", knowledge="{first['knowledge']}"
+Second pair: verb="{second['verb']}", knowledge="{second['knowledge']}"
+
+Do these two action-verb-and-knowledge pairs operate on the SAME underlying
+subject/system, or are they two distinct, unrelated topics stitched into one
+sentence? Mark is_merged_cos=true only for unrelated objectives that should be
+split. Two verbs can be valid when one action builds/examines an object and the
+other evaluates a property of that same object.
+
+Calibration:
+- "Develop a linked list for the given dynamic system and determine the space and time complexity." -> false; both actions concern the linked-list system.
+- "Construct and Test machine learning model to predict the mood of public w.r.t. public policy questions using the associated data sets." -> false; both actions concern the same ML model.
+- "Analyze the network traffic and design a mobile app for student attendance." -> true; network traffic and a student-attendance mobile app are unrelated objectives.
+
+Return only JSON:
+{{"is_merged_cos": false, "reason": "brief explanation"}}"""
+
+    try:
+        completion = groq_client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            model="llama-3.3-70b-versatile",
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+        result = json.loads(completion.choices[0].message.content.strip())
+        return bool(result.get("is_merged_cos", False)), str(result.get("reason", ""))
+    except Exception as error:
+        print("Failed to validate co-equal verbs:", str(error))
+        return False, ""
 
 
 def rule_based_check(sentence: str, full_text: str) -> dict:
@@ -417,11 +765,21 @@ def evaluate_sentence(sentence: str,
         level = verb_info["taxonomy_level"] if verb_info else "Unknown"
         has_cond = rules["condition_detected"]
         has_crit = rules["criteria_detected"]
+        action_data = {"score": 0, "bloom_level": level}
+        suggested_assessment_tools = build_assessment_tools_suggestion(action_data, rules)
         return EvaluateResponse(
             total_score=0,
             breakdown=ScoreBreakdown(
                 action=ActionScore(score=0, bloom_level=level, verb=rules["verb"], feedback="API Key Missing"),
-                knowledge=KnowledgeScore(score=0, detected_knowledge=rules["knowledge_phrase"], feedback="API Key Missing"),
+                knowledge=KnowledgeScore(
+                    score=0,
+                    detected_knowledge=rules["knowledge_phrase"],
+                    knowledge_dimension=[],
+                    too_general=False,
+                    is_process_not_product=False,
+                    is_merged_cos=False,
+                    feedback="API Key Missing",
+                ),
                 condition=ConditionScore(
                     score=0, detected=has_cond,
                     condition_text=condition.strip() if condition and condition.strip() else None,
@@ -433,6 +791,7 @@ def evaluate_sentence(sentence: str,
                     feedback="API Key Missing",
                 ),
             ),
+            suggested_assessment_tools=suggested_assessment_tools,
             overall_feedback="Please configure your GROQ_API_KEY environment variable to enable full scoring.",
             improved_objective="Please configure your GROQ_API_KEY environment variable to see an improved objective.",
         )
@@ -461,12 +820,72 @@ def evaluate_sentence(sentence: str,
         action_data["verb_validity_score"] = 2
         action_data["bloom_weight_score"] = 2
 
+    knowledge_data = llm_result.setdefault("knowledge", {})
+    knowledge_phrase_for_analysis = knowledge_data.get("detected_knowledge") or rules["knowledge_phrase"]
+    coequal_verb_pairs = extract_coequal_verb_knowledge_pairs(sentence)
+    is_merged_cos, merged_reason = check_coequal_verbs_share_knowledge(
+        sentence, coequal_verb_pairs
+    )
+    is_too_general, general_reason = check_knowledge_is_too_general(
+        knowledge_phrase_for_analysis,
+        sentence,
+        has_condition=rules["condition_detected"],
+        has_criteria=rules["criteria_detected"],
+    )
+    is_process_not_product, process_reason = check_process_not_product(sentence)
+    knowledge_data["too_general"] = is_too_general
+    knowledge_data["is_process_not_product"] = is_process_not_product
+    knowledge_data["is_merged_cos"] = is_merged_cos
+    if is_too_general or is_process_not_product or is_merged_cos:
+        knowledge_data["score"] = 0
+        if is_too_general and is_process_not_product:
+            knowledge_data["feedback"] = (
+                "This objective is both too general to assess and framed as a course activity rather than a demonstrable outcome. "
+                "Name a concrete domain target and state what the student will be able to do with it."
+            )
+        elif is_too_general:
+            knowledge_data["feedback"] = (
+                "Your objective names an action but not a concrete target - "
+                f"'{knowledge_phrase_for_analysis}' is too general to assess. "
+                "Name the actual topic or domain, for example 'find optimal routing paths in a network graph.'"
+            )
+        elif is_process_not_product:
+            knowledge_data["feedback"] = (
+                "This reads as a course activity rather than a demonstrable outcome. "
+                "Rephrase it to state what the student will be able to do by the end, for example: "
+                "'Implement and compare stack, queue, and tree ADTs for a given application.'"
+            )
+        else:
+            knowledge_data["feedback"] = ""
+
+    if is_merged_cos:
+        first_pair, second_pair = coequal_verb_pairs
+        merged_feedback = (
+            "This looks like two separate objectives combined into one "
+            f"('{first_pair['knowledge']}' and '{second_pair['knowledge']}' are unrelated topics). "
+            "Two action verbs are only valid when both act on the same knowledge element - "
+            "consider splitting this into two objectives, or rewriting them to apply to one system."
+        )
+        knowledge_data["feedback"] = (
+            f"{knowledge_data['feedback']} {merged_feedback}".strip()
+            if knowledge_data.get("feedback") else merged_feedback
+        )
+        action_data["feedback"] = (
+            "The two action verbs act on different knowledge elements, so this reads as two merged objectives rather than one co-equal objective."
+        )
+
+    # The knowledge dimension is descriptive and does not affect rubric scoring.
+    knowledge_data["knowledge_dimension"] = classify_knowledge_dimension(
+        knowledge_phrase_for_analysis, sentence
+    )
+
     # Re-calculate total score
     act_s = action_data.get("score", 0)
     kno_s = llm_result.get("knowledge", {}).get("score", 0)
     con_s = llm_result.get("condition", {}).get("score", 0)
     cri_s = llm_result.get("criteria", {}).get("score", 0)
     llm_result["total_score"] = min(10, act_s + kno_s + con_s + cri_s)
+    suggested_assessment_tools = build_assessment_tools_suggestion(action_data, rules)
 
     # 4. Assemble response from LLM JSON
     return EvaluateResponse(
@@ -477,6 +896,7 @@ def evaluate_sentence(sentence: str,
             condition=ConditionScore(**llm_result["condition"]),
             criteria=CriteriaScore(**llm_result["criteria"]),
         ),
+        suggested_assessment_tools=suggested_assessment_tools,
         overall_feedback=llm_result["overall_feedback"],
         improved_objective=llm_result.get("improved_objective", "Could not generate improved objective."),
     )
