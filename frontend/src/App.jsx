@@ -64,7 +64,8 @@ function App() {
     setLoading(true);
     setError(null);
     try {
-      const endpoint = import.meta.env.PROD ? '/api/evaluate' : 'http://localhost:8000/api/evaluate';
+      const baseUrl = import.meta.env.PROD ? (import.meta.env.VITE_API_URL || '') : 'http://localhost:8000';
+      const endpoint = `${baseUrl}/api/evaluate`;
       const response = await axios.post(endpoint, {
         sentence,
         condition: condition.trim() || null,
